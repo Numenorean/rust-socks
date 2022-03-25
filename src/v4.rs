@@ -1,8 +1,9 @@
-use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, ToSocketAddrs, SocketAddrV4, SocketAddrV6, TcpStream, Ipv4Addr};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
-use {ToTargetAddr, TargetAddr};
+use {TargetAddr, ToTargetAddr};
 
 fn read_response(socket: &mut TcpStream) -> io::Result<SocketAddrV4> {
     let mut response = [0u8; 8];
@@ -10,23 +11,40 @@ fn read_response(socket: &mut TcpStream) -> io::Result<SocketAddrV4> {
     let mut response = &response[..];
 
     if response.read_u8()? != 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid response version"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid response version",
+        ));
     }
 
     match response.read_u8()? {
         90 => {}
-        91 => return Err(io::Error::new(io::ErrorKind::Other, "request rejected or failed")),
+        91 => {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "request rejected or failed",
+            ))
+        }
         92 => {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                                      "request rejected because SOCKS server cannot connect to \
-                                       idnetd on the client"))
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "request rejected because SOCKS server cannot connect to \
+                                       idnetd on the client",
+            ))
         }
         93 => {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                                      "request rejected because the client program and identd \
-                                       report different user-ids"))
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "request rejected because the client program and identd \
+                                       report different user-ids",
+            ))
         }
-        _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid response code")),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid response code",
+            ))
+        }
     }
 
     let port = response.read_u16::<BigEndian>()?;
@@ -51,18 +69,36 @@ impl Socks4Stream {
     /// to the proxy server using the SOCKS4A protocol extension. If the proxy
     /// server does not support SOCKS4A, consider performing the DNS lookup
     /// locally and passing a `TargetAddr::Ip`.
-    pub fn connect<T, U>(proxy: T, target: U, userid: &str) -> io::Result<Socks4Stream>
-        where T: ToSocketAddrs,
-              U: ToTargetAddr
+    pub fn connect<T, U>(
+        proxy: T,
+        target: U,
+        userid: &str,
+        timeout: Option<Duration>,
+    ) -> io::Result<Socks4Stream>
+    where
+        T: ToSocketAddrs,
+        U: ToTargetAddr,
     {
-        Self::connect_raw(1, proxy, target, userid)
+        Self::connect_raw(1, proxy, target, userid, timeout)
     }
 
-    fn connect_raw<T, U>(command: u8, proxy: T, target: U, userid: &str) -> io::Result<Socks4Stream>
-        where T: ToSocketAddrs,
-              U: ToTargetAddr
+    fn connect_raw<T, U>(
+        command: u8,
+        proxy: T,
+        target: U,
+        userid: &str,
+        timeout: Option<Duration>,
+    ) -> io::Result<Socks4Stream>
+    where
+        T: ToSocketAddrs,
+        U: ToTargetAddr,
     {
-        let mut socket = TcpStream::connect(proxy)?;
+        let mut socket = if let Some(timeout) = timeout {
+            let addr = proxy.to_socket_addrs().unwrap().next().unwrap();
+            TcpStream::connect_timeout(&addr, timeout)?
+        } else {
+            TcpStream::connect(proxy)?
+        };
 
         let target = target.to_target_addr()?;
 
@@ -74,8 +110,10 @@ impl Socks4Stream {
                 let addr = match addr {
                     SocketAddr::V4(addr) => addr,
                     SocketAddr::V6(_) => {
-                        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                                  "SOCKS4 does not support IPv6"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "SOCKS4 does not support IPv6",
+                        ));
                     }
                 };
                 let _ = packet.write_u16::<BigEndian>(addr.port());
@@ -96,10 +134,7 @@ impl Socks4Stream {
         socket.write_all(&packet)?;
         let proxy_addr = read_response(&mut socket)?;
 
-        Ok(Socks4Stream {
-            socket: socket,
-            proxy_addr: proxy_addr,
-        })
+        Ok(Socks4Stream { socket, proxy_addr })
     }
 
     /// Returns the proxy-side address of the connection between the proxy and
@@ -165,11 +200,17 @@ impl Socks4Listener {
     ///
     /// The proxy will filter incoming connections based on the value of
     /// `target`.
-    pub fn bind<T, U>(proxy: T, target: U, userid: &str) -> io::Result<Socks4Listener>
-        where T: ToSocketAddrs,
-              U: ToTargetAddr
+    pub fn bind<T, U>(
+        proxy: T,
+        target: U,
+        userid: &str,
+        timeout: Option<Duration>,
+    ) -> io::Result<Socks4Listener>
+    where
+        T: ToSocketAddrs,
+        U: ToTargetAddr,
     {
-        Socks4Stream::connect_raw(2, proxy, target, userid).map(Socks4Listener)
+        Socks4Stream::connect_raw(2, proxy, target, userid, timeout).map(Socks4Listener)
     }
 
     /// The address of the proxy-side TCP listener.
@@ -202,7 +243,7 @@ impl Socks4Listener {
 #[cfg(test)]
 mod test {
     use std::io::{Read, Write};
-    use std::net::{SocketAddr, SocketAddrV4, ToSocketAddrs, TcpStream};
+    use std::net::{SocketAddr, SocketAddrV4, TcpStream, ToSocketAddrs};
 
     use super::*;
 
@@ -210,19 +251,16 @@ mod test {
         "google.com:80"
             .to_socket_addrs()
             .unwrap()
-            .filter_map(|a| {
-                match a {
-                    SocketAddr::V4(a) => Some(a),
-                    SocketAddr::V6(_) => None,
-                }
+            .find_map(|a| match a {
+                SocketAddr::V4(a) => Some(a),
+                SocketAddr::V6(_) => None,
             })
-            .next()
             .unwrap()
     }
 
     #[test]
     fn google() {
-        let mut socket = Socks4Stream::connect("127.0.0.1:1080", google_ip(), "").unwrap();
+        let mut socket = Socks4Stream::connect("127.0.0.1:1080", google_ip(), "", None).unwrap();
 
         socket.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
         let mut result = vec![];
@@ -236,7 +274,8 @@ mod test {
     #[test]
     #[ignore] // dante doesn't support SOCKS4A
     fn google_dns() {
-        let mut socket = Socks4Stream::connect("127.0.0.1:8080", "google.com:80", "").unwrap();
+        let mut socket =
+            Socks4Stream::connect("127.0.0.1:8080", "google.com:80", "", None).unwrap();
 
         socket.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
         let mut result = vec![];
@@ -250,10 +289,10 @@ mod test {
     #[test]
     fn bind() {
         // First figure out our local address that we'll be connecting from
-        let socket = Socks4Stream::connect("127.0.0.1:1080", google_ip(), "").unwrap();
+        let socket = Socks4Stream::connect("127.0.0.1:1080", google_ip(), "", None).unwrap();
         let addr = socket.proxy_addr();
 
-        let listener = Socks4Listener::bind("127.0.0.1:1080", addr, "").unwrap();
+        let listener = Socks4Listener::bind("127.0.0.1:1080", addr, "", None).unwrap();
         let addr = listener.proxy_addr().unwrap();
         let mut end = TcpStream::connect(addr).unwrap();
         let mut conn = listener.accept().unwrap();
