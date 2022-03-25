@@ -94,7 +94,7 @@ fn write_addr(mut packet: &mut [u8], target: &TargetAddr) -> io::Result<usize> {
 
 /// Authentication methods
 #[derive(Debug)]
-enum Authentication<'a> {
+pub enum Authentication<'a> {
     Password { username: &'a str, password: &'a str },
     None
 }
@@ -125,11 +125,11 @@ pub struct Socks5Stream {
 
 impl Socks5Stream {
     /// Connects to a target server through a SOCKS5 proxy.
-    pub fn connect<T, U>(proxy: T, target: U, timeout: Option<Duration>) -> io::Result<Socks5Stream>
+    pub fn connect<T, U>(proxy: T, target: U, auth: &Authentication, timeout: Option<Duration>) -> io::Result<Socks5Stream>
         where T: ToSocketAddrs,
               U: ToTargetAddr
     {
-        Self::connect_raw(1, proxy, target, &Authentication::None, timeout)
+        Self::connect_raw(1, proxy, target, auth, timeout)
     }
 
     /// Connects to a target server through a SOCKS5 proxy using given
