@@ -16,7 +16,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSoc
 use std::vec;
 
 pub use v4::{Socks4Listener, Socks4Stream};
-pub use v5::{Socks5Datagram, Socks5Listener, Socks5Stream};
+pub use v5::{Socks5Datagram, Socks5Listener, Socks5Stream, Authentication};
 
 mod v4;
 mod v5;
